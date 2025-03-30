@@ -213,3 +213,66 @@
     )
   )
 )
+;; Get proposal status text
+(define-read-only (get-proposal-status-text (status uint))
+  (match status
+    PROPOSAL-STATUS-PENDING "Pending"
+    PROPOSAL-STATUS-ACTIVE "Active"
+    PROPOSAL-STATUS-APPROVED "Approved"
+    PROPOSAL-STATUS-REJECTED "Rejected"
+    PROPOSAL-STATUS-EXECUTED "Executed"
+    PROPOSAL-STATUS-EXPIRED "Expired"
+    "Unknown"
+  )
+)
+
+;; Check if a proposal can be executed
+(define-read-only (can-execute-proposal (proposal-id uint))
+  (let
+    (
+      (proposal (unwrap! (get-proposal proposal-id) false))
+      (current-block block-height)
+    )
+    (and
+      (is-eq (get status proposal) PROPOSAL-STATUS-APPROVED)
+      (>= current-block (get execution-allowed-at-block proposal))
+      (< current-block (get expires-at-block proposal))
+      (is-none (get executed-at-block proposal))
+    )
+  )
+)
+
+;; Get treasury balance
+(define-read-only (get-treasury-balance)
+  (var-get treasury-balance)
+)
+
+;; Public functions
+
+;; Submit a new proposal
+(define-public (submit-proposal
+  (title (string-utf8 100)) 
+  (description (string-utf8 1000))
+  (payload-contract principal)
+  (payload-function (string-ascii 128))
+  (payload-args (list 10 (string-utf8 100)))
+  (is-quadratic bool)
+  (options-count uint)
+)
+  (let
+    (
+      (proposal-id (var-get next-proposal-id))
+      (user-balance (unwrap! (get-token-balance tx-sender) (err ERR-INSUFFICIENT-BALANCE)))
+      (current-block block-height)
+      (voting-starts-at-block (+ current-block u1))
+      (voting-ends-at-block (+ voting-starts-at-block (var-get voting-period)))
+      (execution-allowed-at-block (+ voting-ends-at-block (var-get execution-timelock)))
+      (expires-at-block (+ execution-allowed-at-block (var-get proposal-expiration-period)))
+    )
+    
+    ;; Check if user has enough tokens to submit proposal
+    (asserts! (>= user-balance (var-get proposal-submission-threshold)) (err ERR-INSUFFICIENT-BALANCE))
+    
+    ;; Check if options count is valid
+    (asserts! (<= options-count (var-get max-options-per-proposal)) (err ERR-INVALID-STATE))
+    (asserts! (> options-count u0) (err ERR-INVALID-STATE))
