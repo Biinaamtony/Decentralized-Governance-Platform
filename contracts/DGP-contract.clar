@@ -276,3 +276,131 @@
     ;; Check if options count is valid
     (asserts! (<= options-count (var-get max-options-per-proposal)) (err ERR-INVALID-STATE))
     (asserts! (> options-count u0) (err ERR-INVALID-STATE))
+
+     ;; Create proposal
+    (map-set proposals
+      { proposal-id: proposal-id }
+      {
+        title: title,
+        description: description,
+        proposer: tx-sender,
+        status: PROPOSAL-STATUS-ACTIVE,
+        created-at-block: current-block,
+        voting-starts-at-block: voting-starts-at-block,
+        voting-ends-at-block: voting-ends-at-block,
+        execution-allowed-at-block: execution-allowed-at-block,
+        expires-at-block: expires-at-block,
+        payload-contract: payload-contract,
+        payload-function: payload-function,
+        payload-args: payload-args,
+        yes-votes: u0,
+        no-votes: u0,
+        abstain-votes: u0,
+        executed-at-block: none,
+        is-quadratic: is-quadratic,
+        options-count: options-count
+      }
+    )
+    
+    ;; Initialize options if more than standard yes/no/abstain
+    (if (> options-count u3)
+      (begin
+        ;; Initialize standard options
+        (map-set proposal-options 
+          { proposal-id: proposal-id, option-id: u1 } 
+          { option-name: "Yes", option-description: "Approve the proposal", votes: u0 }
+        )
+        (map-set proposal-options 
+          { proposal-id: proposal-id, option-id: u2 } 
+          { option-name: "No", option-description: "Reject the proposal", votes: u0 }
+        )
+        (map-set proposal-options 
+          { proposal-id: proposal-id, option-id: u3 } 
+          { option-name: "Abstain", option-description: "Abstain from voting", votes: u0 }
+        )
+      )
+      ;; For standard yes/no/abstain, we just rely on the counts in the proposal record
+      true
+    )
+    
+    ;; Increment proposal ID counter
+    (var-set next-proposal-id (+ proposal-id u1))
+    
+    (ok proposal-id)
+  )
+)
+
+;; Set option details when proposal has custom options
+(define-public (set-proposal-option
+  (proposal-id uint)
+  (option-id uint)
+  (option-name (string-utf8 100))
+  (option-description (string-utf8 500))
+)
+  (let
+    (
+      (proposal (unwrap! (get-proposal proposal-id) (err ERR-PROPOSAL-NOT-FOUND)))
+    )
+    
+    ;; Check if caller is the proposer
+    (asserts! (is-eq tx-sender (get proposer proposal)) (err ERR-NOT-AUTHORIZED))
+    
+    ;; Check if option id is valid
+    (asserts! (<= option-id (get options-count proposal)) (err ERR-INVALID-STATE))
+    (asserts! (> option-id u0) (err ERR-INVALID-STATE))
+    
+    ;; Check if proposal is still pending or just became active
+    (asserts! (<= block-height (+ (get created-at-block proposal) u10)) (err ERR-INVALID-STATE))
+    
+    ;; Set option details
+    (map-set proposal-options
+      { proposal-id: proposal-id, option-id: option-id }
+      {
+        option-name: option-name,
+        option-description: option-description,
+        votes: u0
+      }
+    )
+    
+    (ok true)
+  )
+)
+
+;; Vote on a proposal
+(define-public (vote
+  (proposal-id uint)
+  (option-id uint)
+  (vote-amount uint)
+)
+  (let
+    (
+      (proposal (unwrap! (get-proposal proposal-id) (err ERR-PROPOSAL-NOT-FOUND)))
+      (user-balance (unwrap! (get-token-balance tx-sender) (err ERR-INSUFFICIENT-BALANCE)))
+      (voting-power (get-total-voting-power tx-sender))
+      (current-block block-height)
+    )
+    
+    ;; Check if proposal is active
+    (asserts! (is-eq (get status proposal) PROPOSAL-STATUS-ACTIVE) (err ERR-INVALID-STATE))
+    
+    ;; Check if voting period is active
+    (asserts! (>= current-block (get voting-starts-at-block proposal)) (err ERR-VOTING-CLOSED))
+    (asserts! (<= current-block (get voting-ends-at-block proposal)) (err ERR-VOTING-CLOSED))
+    
+    ;; Check if user has already voted
+    (asserts! (is-none (get-vote proposal-id tx-sender)) (err ERR-ALREADY-VOTED))
+    
+    ;; Check if user has enough voting power
+    (asserts! (>= voting-power vote-amount) (err ERR-INSUFFICIENT-VOTING-POWER))
+    
+    ;; Check if option is valid
+    (asserts! (<= option-id (get options-count proposal)) (err ERR-INVALID-VOTE))
+    (asserts! (> option-id u0) (err ERR-INVALID-VOTE))
+    
+    ;; Calculate vote power (quadratic or linear)
+    (let
+      (
+        (effective-vote-power (if (get is-quadratic proposal)
+                               (calculate-quadratic-vote-power vote-amount)
+                               vote-amount))
+      )
