@@ -111,3 +111,105 @@
     amount: uint
   }
 )
+;; Treasury balance
+(define-data-var treasury-balance uint u0)
+
+;; Read-only functions
+
+;; Get governance token details
+(define-read-only (get-governance-token)
+  (var-get governance-token-contract)
+)
+
+;; Get proposal details
+(define-read-only (get-proposal (proposal-id uint))
+  (map-get? proposals { proposal-id: proposal-id })
+)
+
+;; Get proposal option
+(define-read-only (get-proposal-option (proposal-id uint) (option-id uint))
+  (map-get? proposal-options { proposal-id: proposal-id, option-id: option-id })
+)
+
+;; Get vote for a specific voter
+(define-read-only (get-vote (proposal-id uint) (voter principal))
+  (map-get? votes { proposal-id: proposal-id, voter: voter })
+)
+
+;; Get delegation details
+(define-read-only (get-delegation (delegator principal))
+  (map-get? delegations { delegator: delegator })
+)
+
+;; Calculate total voting power for a user
+(define-read-only (get-total-voting-power (user principal))
+  (let
+    (
+      (direct-power (default-to u0 (get-token-balance user)))
+      (delegated-power (fold total-delegated-power-reducer (get-delegators user) u0))
+    )
+    (+ direct-power delegated-power)
+  )
+)
+
+;; Helper to get all delegators to a specific delegate
+(define-read-only (get-delegators (delegate principal))
+  ;; This would require an off-chain indexer in practice
+  ;; For demonstration, we return an empty list
+  (list)
+)
+
+;; Fold reducer for calculating delegated power
+(define-read-only (total-delegated-power-reducer (delegator principal) (total uint))
+  (let
+    (
+      (delegation (get-delegation delegator))
+    )
+    (match delegation
+      del (+ total (get amount del))
+      total
+    )
+  )
+)
+
+;; Calculate quadratic vote power
+(define-read-only (calculate-quadratic-vote-power (amount uint))
+  ;; Square root approximation - in real contract would need more precision
+  ;; For simplicity, this is a rough approximation
+  (let
+    (
+      (sqrt-power (sqrti amount))
+    )
+    sqrt-power
+  )
+)
+
+;; Integer square root approximation
+(define-read-only (sqrti (n uint))
+  (if (<= n u1)
+    n
+    (let
+      (
+        (x (/ n u2))
+        (y (+ (/ n x) x))
+        (z (/ y u2))
+      )
+      (if (< z x)
+        (sqrti-iter z n)
+        (sqrti-iter x n)
+      )
+    )
+  )
+)
+
+(define-read-only (sqrti-iter (guess uint) (n uint))
+  (let
+    (
+      (new-guess (/ (+ guess (/ n guess)) u2))
+    )
+    (if (or (<= (- guess new-guess) u1) (<= (- new-guess guess) u1))
+      new-guess
+      (sqrti-iter new-guess n)
+    )
+  )
+)
